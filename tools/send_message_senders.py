@@ -331,10 +331,12 @@ def _plugin_standalone_sender(platform_name, *, label=None, discover=True):
     return entry.standalone_sender_fn, None
 
 
-async def _registry_standalone_send(platform_name, pconfig, chat_id, message, thread_id=None):
-    """One-shot text send through a plugin's ``standalone_sender_fn``."""
+async def _registry_standalone_send(platform_name, pconfig, chat_id, message, thread_id=None, subject=None):
+    """One-shot text send through a plugin's ``standalone_sender_fn``. ``subject`` (email cron
+    deliveries name the job) is forwarded ONLY when set, so plugins without the kwarg keep working."""
     sender, err = _plugin_standalone_sender(platform_name)
-    return err or await sender(pconfig, chat_id, message, thread_id=thread_id)
+    return err or await sender(pconfig, chat_id, message, thread_id=thread_id,
+                               **({"subject": subject} if subject else {}))
 
 
 async def _resolve_slack_user_target(token, chat_id):

@@ -752,6 +752,62 @@ class TestSendToPlatformWhatsapp:
         assert _call.args[2] == "hello from hermes"
 
 
+class TestSendToPlatformEmailSubject:
+    """``subject=`` on _send_to_platform reaches the email standalone sender
+    (cron deliveries name the job); omitted entirely when None so plugins
+    without the kwarg keep working."""
+
+    def _patch_email_sender(self, async_mock):
+        from hermes_cli.plugins import discover_plugins
+        from gateway.platform_registry import platform_registry
+        discover_plugins()
+        entry = platform_registry.get("email")
+        original = entry.standalone_sender_fn
+        entry.standalone_sender_fn = async_mock
+        return entry, original
+
+    def test_subject_forwarded_when_given(self):
+        chat_id = "user@test.com"
+        async_mock = AsyncMock(return_value={"success": True, "platform": "email", "chat_id": chat_id})
+        entry, original = self._patch_email_sender(async_mock)
+        try:
+            result = asyncio.run(
+                _send_to_platform(
+                    Platform.EMAIL,
+                    SimpleNamespace(enabled=True, token=None, extra={}),
+                    chat_id,
+                    "report body",
+                    subject="Hermes Agent: daily-report",
+                )
+            )
+        finally:
+            entry.standalone_sender_fn = original
+
+        assert result["success"] is True
+        async_mock.assert_awaited_once()
+        assert async_mock.await_args.kwargs["subject"] == "Hermes Agent: daily-report"
+
+    def test_subject_kwarg_omitted_when_none(self):
+        chat_id = "user@test.com"
+        async_mock = AsyncMock(return_value={"success": True, "platform": "email", "chat_id": chat_id})
+        entry, original = self._patch_email_sender(async_mock)
+        try:
+            result = asyncio.run(
+                _send_to_platform(
+                    Platform.EMAIL,
+                    SimpleNamespace(enabled=True, token=None, extra={}),
+                    chat_id,
+                    "report body",
+                )
+            )
+        finally:
+            entry.standalone_sender_fn = original
+
+        assert result["success"] is True
+        async_mock.assert_awaited_once()
+        assert "subject" not in async_mock.await_args.kwargs
+
+
 class TestSendTelegramHtmlDetection:
     """Verify that messages containing HTML tags are sent with parse_mode=HTML
     and that plain / markdown messages use MarkdownV2."""

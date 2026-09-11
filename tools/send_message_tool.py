@@ -585,10 +585,12 @@ _TEXT_SENDERS = {
 _MEDIA_PLATFORMS_NOTE = "telegram, discord, matrix, weixin, signal, yuanbao, feishu, whatsapp and slack"
 
 
-async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None, media_files=None, force_document=False, args=None):
+async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None, media_files=None, force_document=False, args=None, subject=None):
     """Route to the platform sender, chunking long text with the adapters' splitter. Order matters:
     Weixin first (its native helper must not be blocked by unrelated optional imports such as
-    lark-oapi), Telegram (chunks itself), plugin standalone media, native chunked, generic text."""
+    lark-oapi), Telegram (chunks itself), plugin standalone media, native chunked, generic text.
+    ``subject`` is only consumed by the registry standalone senders (email: cron deliveries name
+    the job); every other route ignores it."""
     from gateway.config import Platform
     platform_name = platform.value if hasattr(platform, "value") else str(platform)
     media_files = media_files or []
@@ -621,7 +623,10 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
                    f"native send_message media delivery is currently only supported for {_MEDIA_PLATFORMS_NOTE}")
     text_sender = _TEXT_SENDERS.get(platform_name)
     if text_sender is not None:
-        send_one = lambda chunk, is_last: text_sender(pconfig, chat_id, chunk, thread_id)  # noqa: E731
+        # ``subject`` only reaches senders that accept it (email's _registry_standalone_send);
+        # cron sets it for email alone, so the lambda-based senders never see the kwarg.
+        send_one = lambda chunk, is_last: text_sender(pconfig, chat_id, chunk, thread_id,  # noqa: E731
+                                                      **({"subject": subject} if subject else {}))
     else:
         from gateway.platform_registry import platform_registry
         entry = platform_registry.get(platform_name)

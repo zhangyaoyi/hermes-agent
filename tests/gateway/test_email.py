@@ -797,6 +797,89 @@ class TestReconnectSeenUidsRestore(unittest.TestCase):
         asyncio.run(adapter.disconnect())
 
 
+class TestExplicitSubject(unittest.TestCase):
+    """Explicit subject override (cron deliveries name the job in the Subject header)."""
+
+    def _make_adapter(self):
+        from gateway.config import PlatformConfig
+        with patch.dict(os.environ, {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "EMAIL_SMTP_HOST": "smtp.test.com",
+        }):
+            from plugins.platforms.email.adapter import EmailAdapter
+            adapter = EmailAdapter(PlatformConfig(enabled=True))
+        return adapter
+
+    def test_metadata_subject_wins_over_thread_context(self):
+        """metadata["subject"] is used verbatim (no Re: prefix), even with thread context."""
+        import asyncio
+        adapter = self._make_adapter()
+        adapter._thread_context["user@test.com"] = {
+            "subject": "Project question",
+            "message_id": "<original@test.com>",
+        }
+
+        with patch("smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value = mock_server
+
+            result = asyncio.run(adapter.send(
+                "user@test.com", "report body",
+                metadata={"subject": "Hermes Agent: daily-report"}))
+
+            self.assertTrue(result.success)
+            send_call = mock_server.send_message.call_args[0][0]
+            self.assertEqual(send_call["Subject"], "Hermes Agent: daily-report")
+            # Threading headers still point at the original message.
+            self.assertEqual(send_call["In-Reply-To"], "<original@test.com>")
+
+    def test_send_without_metadata_keeps_thread_context_subject(self):
+        """No metadata subject → existing thread-context/Re: behavior is unchanged."""
+        import asyncio
+        adapter = self._make_adapter()
+        adapter._thread_context["user@test.com"] = {
+            "subject": "Project question",
+            "message_id": "<original@test.com>",
+        }
+
+        with patch("smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value = mock_server
+
+            result = asyncio.run(adapter.send("user@test.com", "reply body"))
+
+            self.assertTrue(result.success)
+            send_call = mock_server.send_message.call_args[0][0]
+            self.assertEqual(send_call["Subject"], "Re: Project question")
+
+    def test_send_document_forwards_metadata_subject(self):
+        """send_document passes metadata["subject"] through to the attachment email."""
+        import asyncio
+        import tempfile
+        adapter = self._make_adapter()
+
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"report content")
+            tmp_path = f.name
+
+        try:
+            with patch("smtplib.SMTP") as mock_smtp:
+                mock_server = MagicMock()
+                mock_smtp.return_value = mock_server
+
+                result = asyncio.run(adapter.send_document(
+                    "user@test.com", tmp_path, "Here is the report",
+                    metadata={"subject": "Hermes Agent: daily-report"}))
+
+                self.assertTrue(result.success)
+                send_call = mock_server.send_message.call_args[0][0]
+                self.assertEqual(send_call["Subject"], "Hermes Agent: daily-report")
+        finally:
+            os.unlink(tmp_path)
+
+
 class TestSendEmailStandalone(unittest.TestCase):
     """Test the standalone _send_email function in send_message_tool."""
 
@@ -832,6 +915,31 @@ class TestSendEmailStandalone(unittest.TestCase):
             self.assertIn("Date", send_call)
             self.assertEqual(send_call["To"], "user@test.com")
             self.assertEqual(send_call["From"], "hermes@test.com")
+
+    @patch.dict(os.environ, {
+        "EMAIL_ADDRESS": "hermes@test.com",
+        "EMAIL_PASSWORD": "secret",
+        "EMAIL_SMTP_HOST": "smtp.test.com",
+        "EMAIL_SMTP_PORT": "587",
+    })
+    def test_send_email_tool_explicit_subject(self):
+        """_standalone_send uses the explicit subject (cron names the job) when given."""
+        import asyncio
+        from plugins.platforms.email.adapter import _standalone_send as _email_send
+        from types import SimpleNamespace
+
+        with patch("smtplib.SMTP") as mock_smtp:
+            mock_server = MagicMock()
+            mock_smtp.return_value = mock_server
+
+            result = asyncio.run(_email_send(
+                SimpleNamespace(token=None, api_key=None,
+                                extra={"address": "hermes@test.com", "smtp_host": "smtp.test.com"}),
+                "user@test.com", "Hello", subject="Hermes Agent: daily-report"))
+
+            self.assertTrue(result["success"])
+            send_call = mock_server.send_message.call_args[0][0]
+            self.assertEqual(send_call["Subject"], "Hermes Agent: daily-report")
 
 
 class TestSmtpConnectionCleanup(unittest.TestCase):

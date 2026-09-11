@@ -168,6 +168,12 @@ def _cron_mirror_message(job: dict, text: str) -> str:
     return f"[Cron delivery: {job.get('name') or job.get('id', 'cron')}]\n{text}"
 
 
+def _cron_email_subject(job: dict) -> str:
+    """Subject header for cron EMAIL deliveries: names the job (id fallback) so a mailbox of
+    job results is scannable. Used verbatim (no ``Re:`` prefix) by the email adapter."""
+    return f"Hermes Agent: {job.get('name') or job.get('id', 'cron')}"
+
+
 def _maybe_mirror_cron_delivery(
     job: dict, platform_name: str, chat_id: str, mirror_text: str, thread_id: Optional[str] = None,
     user_id: Optional[str] = None, *, enabled: bool = False,
@@ -1229,6 +1235,11 @@ def _live_route_metadata(t: _TargetDelivery) -> tuple[Optional[str], dict, dict]
     if t.origin_target and t.origin.get("scope_id"):
         route_metadata.setdefault("scope_id", str(t.origin["scope_id"]))
         media_metadata.setdefault("scope_id", str(t.origin["scope_id"]))
+    # EMAIL only: the adapter turns metadata["subject"] into the Subject header (names the job).
+    # Scoped to email so no other platform receives a metadata key it does not know.
+    if t.platform == Platform.EMAIL:
+        route_metadata["subject"] = _cron_email_subject(job)
+        media_metadata["subject"] = route_metadata["subject"]
     return route_thread_id, route_metadata, media_metadata
 
 
@@ -1450,9 +1461,11 @@ def _standalone_send(
     shutdown_msg = f"delivery to {t.where} skipped — interpreter is shutting down"
 
     def _send():
+        # subject is email-only: other platforms' standalone senders don't accept the kwarg.
         return _send_to_platform(
             t.platform, t.pconfig, t.chat_id, content, thread_id=t.thread_id,
-            media_files=media_files)
+            media_files=media_files,
+            **({"subject": _cron_email_subject(job)} if t.platform_name == "email" else {}))
 
     def _warned(msg: str) -> tuple[None, str]:
         logger.warning("Job '%s': %s", job["id"], msg)

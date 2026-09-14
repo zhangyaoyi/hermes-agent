@@ -797,6 +797,34 @@ class TestReconnectSeenUidsRestore(unittest.TestCase):
         asyncio.run(adapter.disconnect())
 
 
+class TestLongMessageDelivery(unittest.TestCase):
+    """Cron output delivered by email must NOT hit the gateway's 4000-char cap.
+
+    Email bodies travel as one SMTP message with no platform-side hard length limit
+    (MAX_MESSAGE_LENGTH is a Gmail-safe guideline, not an enforced cap), so the
+    delivery router must treat the adapter as long-message-capable and hand it the
+    full content instead of truncating with a "full output saved to" footer.
+    """
+
+    def _make_adapter(self):
+        from gateway.config import PlatformConfig
+        with patch.dict(os.environ, {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "EMAIL_SMTP_HOST": "smtp.test.com",
+        }):
+            from plugins.platforms.email.adapter import EmailAdapter
+            adapter = EmailAdapter(PlatformConfig(enabled=True))
+        return adapter
+
+    def test_email_declares_long_message_delivery(self):
+        """The delivery router skips MAX_PLATFORM_OUTPUT truncation only for adapters
+        that declare splits_long_messages; email must declare it so full cron output
+        (e.g. a long quiz) reaches the recipient untruncated."""
+        self.assertIs(getattr(self._make_adapter(), "splits_long_messages", False), True)
+
+
 class TestExplicitSubject(unittest.TestCase):
     """Explicit subject override (cron deliveries name the job in the Subject header)."""
 

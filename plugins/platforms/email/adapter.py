@@ -332,6 +332,12 @@ class EmailAdapter(BasePlatformAdapter):
     # adapter per retry; without this connect(is_reconnect=True) would re-mark the mailbox seen and skip
     # mail that arrived during the outage. Keyed by address (multiplex runs several accounts); same-process only.
     _seen_uids_snapshot: Dict[str, set] = {}
+    # An email body rides a single SMTP message — there is no platform-side hard length cap to chunk
+    # against (MAX_MESSAGE_LENGTH above is a Gmail-safe guideline, not an enforced limit), unlike
+    # Telegram/Slack-style adapters that split via truncate_message(). Declaring this tells the
+    # delivery router (gateway/delivery.py) to hand over the full content instead of truncating cron
+    # output at MAX_PLATFORM_OUTPUT (4000, a Telegram limit) with a "full output saved to" footer.
+    splits_long_messages = True
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.EMAIL)

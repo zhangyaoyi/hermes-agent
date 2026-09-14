@@ -331,6 +331,33 @@ async def test_long_output_truncated_for_non_chunking_adapter(tmp_path, monkeypa
     assert saved_files[0].read_text() == long_content
 
 
+@pytest.mark.asyncio
+async def test_email_adapter_receives_full_oversized_content(tmp_path, monkeypatch):
+    """Real EmailAdapter declares long-message delivery, so the router must NOT
+    truncate 4000+ char cron output — the full body reaches the adapter intact."""
+    monkeypatch.setattr("gateway.delivery.get_hermes_home", lambda: tmp_path)
+    monkeypatch.setenv("EMAIL_ADDRESS", "hermes@test.com")
+    monkeypatch.setenv("EMAIL_PASSWORD", "secret")
+    monkeypatch.setenv("EMAIL_IMAP_HOST", "imap.test.com")
+    monkeypatch.setenv("EMAIL_SMTP_HOST", "smtp.test.com")
+    from plugins.platforms.email.adapter import EmailAdapter
+    adapter = EmailAdapter(PlatformConfig(enabled=True))
+    sent = []
+
+    async def fake_send(chat_id, content, metadata=None):
+        sent.append(content)
+        return SendResult(success=True, message_id="m1")
+
+    adapter.send = fake_send
+    router = DeliveryRouter(GatewayConfig(), adapters={Platform.EMAIL: adapter})
+    target = DeliveryTarget.parse("email:user@test.com")
+
+    long_content = "x" * 5000
+    await router._deliver_to_platform(target, long_content, metadata={"job_id": "job1"})
+
+    assert sent == [long_content]
+
+
 def _simulate_windows_codepage_write(monkeypatch):
     """Make ``Path.write_text`` behave like a non-UTF-8 Windows console.
 
